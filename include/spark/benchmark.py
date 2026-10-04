@@ -151,9 +151,9 @@ def bench_join(raw_root: str, clean_path: str, repeats: int, scale: int, salt_bu
 
 def to_markdown(clean: dict, join: dict, cores: int, scale: int) -> str:
     lines = ["# Spark tuning benchmark", "",
-             f"Machine: local[*] with {cores} cores. Scale factor: {scale}x. "
+             f"Machine: {os.getenv('SPARK_MASTER', 'local[*,4]')} on a {cores}-core laptop. Scale factor: {scale}x. "
              "Median of the listed runs; join timings exclude a warm-up run.", "",
-             "## A. Cleaning job (all 30 days)", "",
+             "## A. Cleaning job (all days)", "",
              "| Mode | Median runtime (s) | Output files | Rows out | Duplicates removed | Quarantined |",
              "|---|---|---|---|---|---|"]
     for mode in ("baseline", "tuned"):
@@ -216,7 +216,7 @@ def main() -> None:
     clean_res, join_res = saved["clean"], saved["join"]
     md = to_markdown(clean_res, join_res, os.cpu_count() or 0, a.scale)
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    with open(a.out, "w") as f:
+    with open(a.out, "w", encoding="utf-8") as f:
         f.write(md)
     write_json(a.out.replace(".md", ".json"), {"clean": clean_res, "join": join_res})
     print(md)

@@ -20,7 +20,7 @@ Reliability features
   * Backfills: every task is keyed on {{ ds }} and idempotent (partition overwrite in
     Spark, delete+COPY in Snowflake, microbatch in dbt), so any day can be rerun.
         astro dev run backfill create --dag-id ad_analytics_daily \
-            --from-date 2025-01-01 --to-date 2025-01-30 --max-active-runs 4
+            --from-date 2025-01-01 --to-date 2025-01-31 --max-active-runs 4
   * Pools: Spark runs in local mode inside the worker, so only one Spark job at a
     time (pool spark_local=1); all Snowflake writes are serialized (warehouse_writes=1)
     so full-rebuild models never race. Sensors and Spark of other days still overlap.
@@ -74,7 +74,7 @@ with DAG(
     # starts after the day closes, so {{ ds }} is the day being processed.
     schedule=CronDataIntervalTimetable("0 2 * * *", timezone="UTC"),
     start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
-    end_date=datetime(2025, 1, 30, 23, 59, tzinfo=timezone.utc),  # the dataset has 30 days
+    end_date=datetime(2025, 1, 31, 23, 59, tzinfo=timezone.utc),  # 30 days of data spill into a 31st calendar day
     catchup=False,  # history is loaded with an explicit backfill, not by the scheduler
     max_active_runs=4,
     default_args=default_args,

@@ -52,9 +52,9 @@ dbt-docs: ## browse lineage locally
 astro-start: ## start local Airflow (UI on http://localhost:8080)
 	astro dev start
 
-backfill: ## load all 30 days through Airflow
+backfill: ## load all 31 days through Airflow
 	astro dev run backfill create --dag-id ad_analytics_daily \
-	  --from-date 2025-01-01 --to-date 2025-01-30 --max-active-runs 4
+	  --from-date 2025-01-01 --to-date 2025-01-31 --max-active-runs 4
 
 backfill-day: ## rerun one day end to end (e.g. after fixing a bug): make backfill-day DAY=2025-01-07
 	astro dev run backfill create --dag-id ad_analytics_daily \

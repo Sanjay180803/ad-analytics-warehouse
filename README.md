@@ -52,13 +52,15 @@ Dockerfile, requirements.txt, packages.txt, airflow_settings.yaml   Astro image 
 
 ## Data caveats (put these in your write-up, interviewers respect it)
 
-- **Dates are anchored.** Criteo timestamps are seconds from the first impression. Every component anchors day 0 to `CRITEO_ANCHOR_DATE` (default `2025-01-01`), giving 30 days: 2025-01-01 to 2025-01-30.
+- **Dates are anchored.** Criteo timestamps are seconds from the first impression. Every component anchors day 0 to `CRITEO_ANCHOR_DATE` (default `2025-01-01`), giving 31 daily partitions: 2025-01-01 to 2025-01-31 (the last impressions fall just past midnight of day 30).
 - **There is no device field.** `dim_device` uses `cat1`, an undisclosed low-cardinality contextual feature, as a device/placement segment proxy. The modeling pattern (natural key, surrogate key, unknown member) is the real thing; the semantics are a stand-in.
 - **Campaign attributes are simulated.** Criteo campaigns are bare IDs. The landing script generates a seeded change log: the initial state plus 0–3 changes per campaign to budget tier, bid strategy or daily budget. That gives `dim_campaign` genuine SCD2 history.
 - **Cost is transformed.** Criteo rescaled `cost` and `cpo`. Spend, CPC and CPA are internally consistent but are not dollars.
 - **Conversions are sparse.** About 45K conversions across 16.5M impressions, so daily CVR per campaign is noisy.
 
 ## Setup
+
+**On Windows (PowerShell):** use `.\run.ps1 <task>` wherever this README says `make <task>`. Run `.\run.ps1 setup` once first.
 
 ### 0. Prerequisites
 
@@ -125,7 +127,7 @@ Fill in the Snowflake part of `.env` (account identifier, key path, `AIRFLOW_CON
 
 ```bash
 astro dev start          # first build downloads Java, dbt and the hadoop-aws jars; it takes a while
-make backfill            # all 30 days, 4 runs in flight
+make backfill            # all 31 days, 4 runs in flight
 ```
 
 Open http://localhost:8080 to watch it. Each day runs the sensor, Spark, the two loads, freshness, the dbt build and docs.
@@ -145,9 +147,40 @@ select * from analytics.core.dim_campaign where campaign_id = <a campaign with c
 
 To see lineage, open `s3://<bucket>/dbt-docs/index.html` (download it, or front it with S3 static hosting), or run `make dbt-docs` locally.
 
-## Spark tuning: what to measure and how to explain it
+## Spark tuning results
 
-Run `make benchmark` after landing the real data. It writes `docs/benchmark_results.md` and `.json`. Put the table in this README and explain it. These are the levers:
+Measured on the full dataset (16,468,027 impressions, 31 daily partitions), PySpark 4.2 in local mode (`local[4,4]`, 12 GB driver) on a 14-core Windows laptop, reading and writing local disk. Raw output: [`docs/benchmark_results.md`](docs/benchmark_results.md).
+
+### A. Cleaning job: read gzip TSV, cast, dedupe, write Parquet partitioned by day
+
+| Mode | Runtime | Output files | Rows out |
+|---|---|---|---|
+| Baseline (Spark defaults) | 540 s | 6,200 | 16,468,027 |
+| Tuned | 344 s | 31 | 16,468,027 |
+| **Change** | **1.57× faster** | **200× fewer files** | identical |
+
+- **The biggest win is file count, not runtime.** With defaults, Spark shuffles into 200 partitions, and each partition writes one file for every day it touches: 200 × 31 = 6,200 small files. The tuned job sizes output to about 128 MB per file, which here is one file per day. Every downstream reader benefits: Snowflake `COPY INTO` makes one request per file, and Parquet readers pay a fixed cost to open each file.
+- **The baseline also crashed the Spark JVM on the first attempt** with all 14 cores running. The likely cause is memory: each task keeps up to 31 Parquet writers open at once, and each writer buffers a row group. Capping concurrency at 4 tasks with a 12 GB driver let it finish. The tuned job doesn't have this problem, because each task writes to exactly one day.
+- **Runtime gains come from** parsing the gzip once instead of twice (cached and reused for the clean and quarantine outputs), broadcasting the campaign lookup, and sizing shuffle partitions to the data.
+- **Criteo's published file is already clean:** zero duplicates and zero bad rows. The dedupe and quarantine logic still runs, and the synthetic test data (with injected duplicates and malformed rows) is what verifies it.
+
+### B. Joining impressions to a campaign × day attribute table
+
+| Strategy | Runtime | vs default |
+|---|---|---|
+| Sort-merge join (default) | 11.6 s | baseline |
+| AQE skew-join handling | 10.4 s | 1.1× faster |
+| Salted keys (23 hot campaigns × 16 buckets) | 13.7 s | 1.2× **slower** |
+| **Broadcast join** | **3.9 s** | **2.9× faster** |
+
+- **Broadcast wins because the dimension side is tiny,** about 21K campaign-day rows. Sending it to every task means the 16.5M impressions are never shuffled at all.
+- **Salting lost, and that's the expected result here.** Skew in this dataset is moderate: the top campaign has 2.7% of impressions and the top 10 have 18.6%. No single task is a severe straggler, so splitting hot keys only adds cost (16 copies of their dimension rows plus an extra join column) without removing a bottleneck.
+- **AQE barely helped for the same reason:** no partition was large enough to cross its skew threshold, so it had little to split.
+- **When salting would win:** when both sides are too large to broadcast, and one key holds a large share of rows (say 20–50%) and creates a straggler task that AQE's automatic split can't fix. The decision order is broadcast first, then AQE, then salt by hand.
+
+## Spark tuning: the levers
+
+These are the settings that differ between the two modes:
 
 | Lever | Baseline | Tuned | Why it matters |
 |---|---|---|---|
@@ -160,7 +193,7 @@ Run `make benchmark` after landing the real data. It writes `docs/benchmark_resu
 
 The **skewed join** benchmark compares `sort_merge`, `salted`, `aqe_skew_join` and `broadcast` on a join of impressions to a campaign × day attribute table. The top Criteo campaigns hold a large share of impressions, so plain sort-merge sends those keys to a few tasks. The salted version splits only the hot campaigns (more than 5× the average) into N buckets and replicates their dimension rows N times.
 
-**Be honest about the result.** At Criteo's scale the attribute table is tiny, so broadcast should win, and on a laptop with few cores salting can be *slower*, because the straggler it removes isn't your bottleneck. That's the right interview answer: broadcast when one side fits in memory; let AQE split skew automatically on Spark 3+; salt by hand when both sides are large and AQE isn't enough. Use `--scale 10` or more, and as many cores as you have, to show where salting starts to pay off.
+To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --clean-root data\bench --repeats 1 --out docs\benchmark_results.md`. Add `--scale 10` to inflate the impressions and see how the join strategies behave at larger scale.
 
 `GZ_TO_PARQUET_RATIO` (default 1.1) converts gzip bytes into an estimate of Parquet size. After your first full run, compare the actual Parquet size to the input and update it.
 

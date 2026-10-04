@@ -111,5 +111,5 @@ def timed(label: str, results: dict):
 
 def write_json(path: str, payload: dict) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
