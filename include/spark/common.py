@@ -34,6 +34,11 @@ def _bundled_hadoop_version() -> str:
 
 
 def build_spark(app_name: str, uses_s3: bool, conf: dict[str, str] | None = None) -> SparkSession:
+    # Python workers must run the same Python as this driver; otherwise Spark may
+    # pick up a different `python` from PATH and fail with PYTHON_VERSION_MISMATCH.
+    import sys
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
     b = (
         SparkSession.builder.appName(app_name)
         # local[*,4]: in local mode Spark gives each task ONE attempt by default, so a
