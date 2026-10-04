@@ -45,9 +45,13 @@ def _rm(path: str) -> None:
         shutil.rmtree(path)
 
 
-def bench_clean(raw_root: str, clean_root: str, anchor: str, repeats: int) -> dict:
-    out = {}
+def bench_clean(raw_root: str, clean_root: str, anchor: str, repeats: int,
+                done: dict | None = None, on_mode=None) -> dict:
+    out = dict(done or {})
     for mode in ("baseline", "tuned"):
+        if mode in out:
+            print(f"[skip] {mode} already measured: {out[mode]['median_total_s']}s")
+            continue
         runs = []
         for _ in range(repeats):
             target = f"{clean_root}/clean_{mode}"
@@ -64,6 +68,8 @@ def bench_clean(raw_root: str, clean_root: str, anchor: str, repeats: int) -> di
             "duplicates_removed": runs[-1]["duplicates_removed"],
             "rows_quarantined": runs[-1]["rows_quarantined"],
         }
+        if on_mode:
+            on_mode(out)  # persist after each mode
     return out
 
 
@@ -180,12 +186,34 @@ def main() -> None:
     p.add_argument("--scale", type=int, default=1)
     p.add_argument("--salt-buckets", type=int, default=16)
     p.add_argument("--out", default="docs/benchmark_results.md")
+    p.add_argument("--only", choices=["all", "clean", "join"], default="all",
+                   help="run one part; results of the other part are kept from the previous run")
     a = p.parse_args()
 
+    import json
     raw, clean = to_spark_path(a.raw_root), to_spark_path(a.clean_root)
-    clean_res = bench_clean(raw, clean, a.anchor_date, a.repeats)
-    join_res = bench_join(raw, f"{clean}/clean_tuned", a.repeats, a.scale, a.salt_buckets)
+    partial_path = a.out.replace(".md", ".json")
+    saved = {}
+    if os.path.exists(partial_path):
+        with open(partial_path) as f:
+            saved = json.load(f)
 
+    def save(key, value):
+        # write after every part, so a crash later never loses finished work
+        saved[key] = value
+        write_json(partial_path, saved)
+        print(f"[saved] {key} results -> {partial_path}")
+
+    if a.only in ("all", "clean"):
+        save("clean", bench_clean(raw, clean, a.anchor_date, a.repeats,
+                                  done=saved.get("clean"), on_mode=lambda r: save("clean", r)))
+    if a.only in ("all", "join"):
+        save("join", bench_join(raw, f"{clean}/clean_tuned", a.repeats, a.scale, a.salt_buckets))
+
+    if len(saved.get("clean", {})) < 2 or "join" not in saved:
+        print("Partial results saved. Run the missing part with --only clean or --only join.")
+        return
+    clean_res, join_res = saved["clean"], saved["join"]
     md = to_markdown(clean_res, join_res, os.cpu_count() or 0, a.scale)
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "w") as f:

@@ -36,7 +36,9 @@ def _bundled_hadoop_version() -> str:
 def build_spark(app_name: str, uses_s3: bool, conf: dict[str, str] | None = None) -> SparkSession:
     b = (
         SparkSession.builder.appName(app_name)
-        .master(os.getenv("SPARK_MASTER", "local[*]"))
+        # local[*,4]: in local mode Spark gives each task ONE attempt by default, so a
+        # single dropped S3 connection kills a whole job. The ",4" allows 4 attempts.
+        .master(os.getenv("SPARK_MASTER", "local[*,4]"))
         .config("spark.driver.memory", os.getenv("SPARK_DRIVER_MEMORY", "4g"))
         .config("spark.sql.session.timeZone", "UTC")
         # write only the partitions present in the DataFrame; never wipe other days
@@ -54,6 +56,13 @@ def build_spark(app_name: str, uses_s3: bool, conf: dict[str, str] | None = None
                     "software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider")
             .config("spark.hadoop.fs.s3a.endpoint.region", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
             .config("spark.hadoop.fs.s3a.fast.upload", "true")
+            # be patient with home internet: more retries, longer timeouts
+            .config("spark.hadoop.fs.s3a.retry.limit", "10")
+            .config("spark.hadoop.fs.s3a.attempts.maximum", "10")
+            .config("spark.hadoop.fs.s3a.connection.timeout", "200000")
+            .config("spark.hadoop.fs.s3a.connection.establish.timeout", "60000")
+            # plain, well-tested S3 input stream (not the newer analytics accelerator)
+            .config("spark.hadoop.fs.s3a.input.stream.type", "classic")
         )
     for k, v in (conf or {}).items():
         b = b.config(k, v)
