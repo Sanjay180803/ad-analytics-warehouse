@@ -1,0 +1,38 @@
+version: 2
+
+sources:
+  - name: criteo
+    description: >
+      Criteo Attribution Modeling for Bidding dataset, cleaned by Spark and loaded
+      by Airflow into RAW. Timestamps are anchored to var('anchor_date').
+    database: raw
+    schema: criteo
+    tables:
+      - name: impressions
+        description: One row per displayed banner (impression), deduplicated by Spark.
+        config:
+          event_time: event_ts
+          loaded_at_field: _loaded_at
+          freshness:
+            warn_after: {count: 26, period: hour}
+            error_after: {count: 50, period: hour}
+        columns:
+          - name: impression_id
+            data_tests: [not_null, unique]
+          - name: user_id
+            config:
+              meta: {pii: user_id}
+          - name: dt
+            data_tests: [not_null]
+
+      - name: campaign_changes
+        description: >
+          Change log of campaign attributes (simulated; Criteo campaigns carry no
+          attributes). One row per state change. Feeds dim_campaign SCD Type 2.
+        config:
+          freshness: null
+        columns:
+          - name: campaign_id
+            data_tests: [not_null]
+          - name: changed_at
+            data_tests: [not_null]

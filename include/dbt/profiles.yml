@@ -1,0 +1,27 @@
+# Credentials come from environment variables, so this file is safe to commit.
+# Locally: export the vars from .env (see README). In Airflow: set in .env, which Astro loads.
+ad_analytics:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      role: transformer
+      warehouse: transforming_wh
+      database: analytics
+      schema: "{{ env_var('DBT_DEV_SCHEMA', 'dbt_dev') }}"
+      threads: 4
+      query_tag: dbt_ad_analytics_dev
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      role: transformer
+      warehouse: transforming_wh
+      database: analytics
+      schema: public
+      threads: 8
+      query_tag: dbt_ad_analytics_prod

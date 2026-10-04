@@ -1,0 +1,142 @@
+version: 2
+
+models:
+  - name: dim_campaign
+    description: >
+      Campaign dimension, SCD Type 2. One row per campaign version with half-open
+      validity window [valid_from, valid_to). Includes an unknown member (campaign_sk = '-1').
+    columns:
+      - name: campaign_sk
+        description: Surrogate key of a campaign version (hash of campaign_id + changed_at).
+        data_tests: [unique, not_null]
+      - name: campaign_id
+        description: Natural key from Criteo.
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
+      - name: valid_to
+        data_tests: [not_null]
+      - name: is_current
+        description: True for the latest version of each campaign.
+      - name: budget_tier
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [low, medium, high, enterprise, unknown]
+
+  - name: dim_date
+    description: Calendar dimension covering impression days plus the conversion window.
+    columns:
+      - name: date_key
+        description: YYYYMMDD integer.
+        data_tests: [unique, not_null]
+      - name: date_day
+        data_tests: [unique, not_null]
+
+  - name: dim_device
+    description: >
+      Device/placement segment dimension derived from Criteo's cat1 feature
+      (Criteo does not publish a device field). Includes an unknown member ('-1').
+    columns:
+      - name: device_key
+        data_tests: [unique, not_null]
+      - name: device_segment_code
+        data_tests: [unique, not_null]
+
+  - name: fct_impressions
+    description: One row per ad impression served. Microbatch-incremental by day.
+    columns:
+      - name: impression_id
+        data_tests: [unique, not_null]
+      - name: date_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: campaign_sk
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_campaign')
+                field: campaign_sk
+      - name: device_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_device')
+                field: device_key
+      - name: user_id
+        description: Pseudonymous Criteo user ID. Masked (salted SHA-256) for every role except PII_READER.
+        config:
+          meta: {pii: user_id}
+        data_tests: [not_null]
+      - name: cost
+        description: Price paid for the display (Criteo-transformed, not real currency).
+        data_tests: [not_null]
+
+  - name: fct_clicks
+    description: One row per click (clicked impression).
+    columns:
+      - name: click_id
+        data_tests: [unique, not_null]
+      - name: impression_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('fct_impressions')
+                field: impression_id
+      - name: date_key
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: campaign_sk
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_campaign')
+                field: campaign_sk
+      - name: user_id
+        description: Masked for every role except PII_READER.
+        config:
+          meta: {pii: user_id}
+
+  - name: fct_conversions
+    description: One row per conversion, credited to a campaign with last-click attribution.
+    columns:
+      - name: conversion_id
+        data_tests: [unique, not_null]
+      - name: conversion_date_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: credited_impression_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_impressions')
+                field: impression_id
+      - name: credited_campaign_sk
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_campaign')
+                field: campaign_sk
+      - name: user_id
+        description: Masked for every role except PII_READER.
+        config:
+          meta: {pii: user_id}
+      - name: path_impressions
+        data_tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 1"

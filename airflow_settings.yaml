@@ -1,0 +1,13 @@
+# Loaded by `astro dev start` into the local Airflow metadata DB.
+# Connections are NOT kept here (they hold secrets); they come from .env as
+# AIRFLOW_CONN_* variables. See .env.example.
+airflow:
+  pools:
+    - pool_name: spark_local
+      pool_slot: 1
+      pool_description: Spark runs in local mode inside the worker; one job at a time
+    - pool_name: warehouse_writes
+      pool_slot: 1
+      pool_description: Serialize Snowflake loads and dbt runs so full-rebuild models never race
+  variables: []
+  connections: []

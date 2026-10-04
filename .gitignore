@@ -1,0 +1,13 @@
+.env
+include/secrets/
+*.p8
+*.pub
+data/
+__pycache__/
+.pytest_cache/
+include/dbt/target/
+include/dbt/dbt_packages/
+include/dbt/logs/
+logs/
+.astro/
+airflow_settings.yaml.local

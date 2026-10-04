@@ -1,0 +1,53 @@
+version: 2
+
+models:
+  - name: mart_campaign_daily_performance
+    description: >
+      CTR, CVR, CPC, CPM, CPA and spend by campaign and day. The table analysts and
+      dashboards should query. Contains no user-level data.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [campaign_id, date_key]
+    columns:
+      - name: campaign_day_id
+        data_tests: [unique, not_null]
+      - name: campaign_sk
+        description: Campaign version in effect at end of day.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_campaign')
+                field: campaign_sk
+      - name: ctr
+        description: clicks / impressions
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: cvr
+        description: conversions (by conversion day) / clicks (by impression day)
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: spend
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+exposures:
+  - name: campaign_performance_dashboard
+    label: Campaign Performance Dashboard
+    type: dashboard
+    maturity: medium
+    description: Daily campaign KPIs (CTR, CVR, spend) for the ads team.
+    depends_on:
+      - ref('mart_campaign_daily_performance')
+    owner:
+      name: Ad Analytics
+      email: data-team@example.com

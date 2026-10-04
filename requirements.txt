@@ -1,0 +1,8 @@
+# Installed into the Airflow image by Astro (on top of the runtime's own packages)
+apache-airflow-providers-amazon
+apache-airflow-providers-snowflake
+apache-airflow-providers-common-sql
+pyspark==4.2.0
+pandas<3
+pyarrow
+boto3

@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: stg_criteo__impressions
+    description: Typed, renamed impressions. One row per impression.
+    columns:
+      - name: impression_id
+        description: SHA-256 of every raw field, computed by Spark. Stable across reruns.
+        data_tests: [unique, not_null]
+      - name: event_date
+        data_tests: [not_null]
+      - name: campaign_id
+        data_tests: [not_null]
+      - name: cost
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+
+  - name: stg_criteo__campaign_changes
+    description: Campaign attribute change log, one row per campaign per change instant.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [campaign_id, changed_at]
+    columns:
+      - name: budget_tier
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [low, medium, high, enterprise]
+      - name: bid_strategy
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [manual_cpc, target_cpa, target_roas, max_conversions]

@@ -1,0 +1,8 @@
+.git
+.env
+data/
+logs/
+include/dbt/target/
+include/dbt/dbt_packages/
+include/dbt/logs/
+**/__pycache__

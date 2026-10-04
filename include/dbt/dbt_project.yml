@@ -1,0 +1,44 @@
+name: ad_analytics
+version: "1.0.0"
+config-version: 2
+profile: ad_analytics
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: target
+clean-targets: [target, dbt_packages]
+
+vars:
+  # Criteo timestamps are relative; this is the calendar date we anchor day 0 to.
+  # Must match CRITEO_ANCHOR_DATE used by the landing script and Spark job.
+  anchor_date: "2025-01-01"
+  # dim_date covers the 30 impression days plus the 30-day conversion window and slack
+  date_spine_end: "2025-04-01"
+  pii_tag: governance.tags.pii_type
+
+models:
+  ad_analytics:
+    +copy_grants: true
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      core:
+        +schema: core
+        +materialized: table
+        +grants:
+          select: [analyst]
+        # classify PII columns on every (re)build so the tag-based masking policy applies
+        +post-hook: "{{ apply_pii_tags() }}"
+      reporting:
+        +schema: marts
+        +materialized: table
+        +grants:
+          select: [analyst]
+
+data_tests:
+  ad_analytics:
+    +severity: error
+    +store_failures: true
+    +schema: test_failures
