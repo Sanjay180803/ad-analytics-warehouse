@@ -11,3 +11,4 @@ include/dbt/logs/
 logs/
 .astro/
 airflow_settings.yaml.local
+.venv/
