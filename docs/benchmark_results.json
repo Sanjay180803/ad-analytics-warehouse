@@ -1,0 +1,60 @@
+{
+  "clean": {
+    "baseline": {
+      "duplicates_removed": 0,
+      "files_out": 6200,
+      "median_total_s": 540.36,
+      "rows_out": 16468027,
+      "rows_quarantined": 0,
+      "runs_s": [
+        540.36
+      ]
+    },
+    "tuned": {
+      "duplicates_removed": 0,
+      "files_out": 31,
+      "median_total_s": 344.18,
+      "rows_out": 16468027,
+      "rows_quarantined": 0,
+      "runs_s": [
+        344.18
+      ]
+    }
+  },
+  "join": {
+    "skew": {
+      "campaigns": 675,
+      "hot_campaigns_salted": 23,
+      "impressions": 16468027,
+      "salt_buckets": 16,
+      "top10_share": 0.1858,
+      "top1_share": 0.0266
+    },
+    "strategies": {
+      "aqe_skew_join": {
+        "median_s": 10.44,
+        "runs_s": [
+          10.44
+        ]
+      },
+      "broadcast": {
+        "median_s": 3.94,
+        "runs_s": [
+          3.94
+        ]
+      },
+      "salted": {
+        "median_s": 13.73,
+        "runs_s": [
+          13.73
+        ]
+      },
+      "sort_merge": {
+        "median_s": 11.57,
+        "runs_s": [
+          11.57
+        ]
+      }
+    }
+  }
+}
