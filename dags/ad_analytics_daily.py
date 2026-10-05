@@ -72,7 +72,9 @@ with DAG(
     description="Criteo impressions: S3 -> Spark -> Snowflake -> dbt star schema",
     # Data-interval semantics: the run for 2025-01-05 covers [01-05, 01-06) and
     # starts after the day closes, so {{ ds }} is the day being processed.
-    schedule=CronDataIntervalTimetable("0 2 * * *", timezone="UTC"),
+    # Midnight boundaries make the logical date exactly YYYY-MM-DD 00:00, so
+    # `backfill create --from-date D --to-date D` selects day D.
+    schedule=CronDataIntervalTimetable("0 0 * * *", timezone="UTC"),
     start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
     end_date=datetime(2025, 1, 31, 23, 59, tzinfo=timezone.utc),  # 30 days of data spill into a 31st calendar day
     catchup=False,  # history is loaded with an explicit backfill, not by the scheduler
@@ -138,7 +140,9 @@ with DAG(
 
     dbt_source_freshness = BashOperator(
         task_id="dbt_source_freshness",
-        bash_command=f"cd {DBT_DIR} && {DBT_BIN} source freshness --select source:criteo.impressions",
+        # `astro dev start` mounts include/ over the image, hiding the dbt_packages the
+        # Dockerfile installed, so install packages at run time (a few seconds).
+        bash_command=f"cd {DBT_DIR} && {DBT_BIN} deps --quiet && {DBT_BIN} source freshness --select source:criteo.impressions",
         env=DBT_ENV,
         append_env=True,
         pool="warehouse_writes",
@@ -149,7 +153,7 @@ with DAG(
         task_id="dbt_build",
         # microbatch models build only this day; tables rebuild; all tests run after
         bash_command=(
-            f"cd {DBT_DIR} && {DBT_BIN} build "
+            f"cd {DBT_DIR} && {DBT_BIN} deps --quiet && {DBT_BIN} build "
             "--event-time-start {{ ds }} --event-time-end {{ macros.ds_add(ds, 1) }}"
         ),
         env=DBT_ENV,

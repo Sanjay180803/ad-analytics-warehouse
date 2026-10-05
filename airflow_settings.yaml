@@ -15,7 +15,7 @@ airflow:
       conn_login: AIRFLOW_SVC
       conn_schema: CRITEO
       conn_extra:
-        account: YOUR_ACCOUNT_IDENTIFIER
+        account: EBRBCFC-PH59040
         database: RAW
         warehouse: LOADING_WH
         role: LOADER

@@ -1,5 +1,5 @@
 # Astro Runtime 3.3 = Airflow 3.3. If `astro dev init` gives you a newer FROM line, use it.
-FROM astrocrpublic.azurecr.io/astronomer/astro-runtime:3.3-2
+FROM astrocrpublic.azurecr.io/runtime:3.3-8
 
 # dbt lives in its own virtualenv so its dependencies never fight Airflow's.
 RUN python -m venv dbt_venv \
