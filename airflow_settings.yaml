@@ -1,6 +1,6 @@
 # Loaded by `astro dev start` into the local Airflow metadata DB.
-# Connections are NOT kept here (they hold secrets); they come from .env as
-# AIRFLOW_CONN_* variables. See .env.example.
+# Nothing secret lives here: AWS keys come from .env, and the Snowflake private
+# key is a file in include/secrets/ (git-ignored). Replace YOUR_ACCOUNT_IDENTIFIER.
 airflow:
   pools:
     - pool_name: spark_local
@@ -9,5 +9,19 @@ airflow:
     - pool_name: warehouse_writes
       pool_slot: 1
       pool_description: Serialize Snowflake loads and dbt runs so full-rebuild models never race
+  connections:
+    - conn_id: snowflake_loader
+      conn_type: snowflake
+      conn_login: AIRFLOW_SVC
+      conn_schema: CRITEO
+      conn_extra:
+        account: YOUR_ACCOUNT_IDENTIFIER
+        database: RAW
+        warehouse: LOADING_WH
+        role: LOADER
+        private_key_file: /usr/local/airflow/include/secrets/rsa_key.p8
+    - conn_id: aws_default
+      conn_type: aws
+      conn_extra:
+        region_name: us-east-1
   variables: []
-  connections: []

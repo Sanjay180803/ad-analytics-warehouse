@@ -123,7 +123,7 @@ Check it with `list @raw.criteo.clean_stage;`. That works (empty) once the trust
 
 ### 5. Run Airflow
 
-Fill in the Snowflake part of `.env` (account identifier, key path, `AIRFLOW_CONN_SNOWFLAKE_LOADER`). Then:
+Fill in the Snowflake part of `.env` (account identifier and key path), and put the same account identifier in `airflow_settings.yaml` (connection `snowflake_loader`). Then:
 
 ```bash
 astro dev start          # first build downloads Java, dbt and the hadoop-aws jars; it takes a while
@@ -229,7 +229,7 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 - **SLAs.** Airflow 3 removed the old `sla=` feature, so this uses **Deadline Alerts**, its replacement. They are DAG-level, and the docs mark them experimental. There are two tiers: warn at 90 minutes after the run is queued, page at 3 hours. The reference is queued time, not logical date, so a backfill of January 2025 doesn't fire 30 instant misses. Each task also has an `execution_timeout` as a hard stop.
 - **Backfills.** Every task is keyed on `{{ ds }}` and idempotent: Spark uses dynamic partition overwrite, Snowflake uses delete + `COPY ... FORCE` in one transaction, and dbt uses microbatch. `catchup=False`, so history loads through an explicit `airflow backfill create` (see `make backfill` and `make backfill-day`).
 - **Pools.** Spark runs in local mode inside the worker, so `spark_local` has 1 slot. All Snowflake and dbt writes share `warehouse_writes` (1 slot), so full-rebuild models never race. Sensors and Spark for other days still overlap.
-- **Deferrable sensor.** It frees the worker slot while waiting for `_SUCCESS`.
+- **Reschedule-mode sensor.** It frees the worker slot between checks for `_SUCCESS`.
 
 ## Keeping it inside free tiers
 

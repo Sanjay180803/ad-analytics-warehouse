@@ -47,6 +47,20 @@ create stage if not exists campaign_changes_stage
   url = 's3://<% s3_bucket %>/raw/criteo/campaign_changes/'
   file_format = ff_csv;
 
+-- FALLBACK if `list @clean_stage` fails with "not authorized to perform:
+-- sts:AssumeRole" even though the trust policy is correct (some AWS accounts,
+-- e.g. organization-managed ones, block cross-account role assumption):
+-- create an IAM user with ONLY the read policy for these two prefixes, then:
+--   create or replace stage clean_stage
+--     url = 's3://<% s3_bucket %>/clean/criteo/'
+--     credentials = (aws_key_id = '...' aws_secret_key = '...')
+--     file_format = ff_parquet;
+--   create or replace stage campaign_changes_stage
+--     url = 's3://<% s3_bucket %>/raw/criteo/campaign_changes/'
+--     credentials = (aws_key_id = '...' aws_secret_key = '...')
+--     file_format = ff_csv;
+-- Snowflake encrypts stage credentials and never shows them back.
+
 -- One row per cleaned impression. Spark output columns + load metadata.
 create table if not exists impressions (
   impression_id             varchar(64)    not null,

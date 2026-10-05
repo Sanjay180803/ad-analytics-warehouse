@@ -60,11 +60,14 @@ create user if not exists airflow_svc
   default_warehouse = transforming_wh
   rsa_public_key = '<% svc_public_key %>'
   comment = 'Airflow + dbt service account';
+-- Spark writes UTC timestamps; keep every pipeline session in UTC so TIMESTAMP_NTZ
+-- casts and current_date() never shift by the account's default (Pacific) offset.
+alter user airflow_svc set timezone = 'UTC';
 grant role loader      to user airflow_svc;
 grant role transformer to user airflow_svc;
 
--- your own human user: lets you switch into any of the functional roles
-set my_user = current_user();
-grant role analyst          to user identifier($my_user);
-grant role governance_admin to user identifier($my_user);
--- grant role pii_reader to user identifier($my_user);   -- only to demo unmasking
+-- your own human user: lets you switch into the functional roles.
+-- Run `show users;`, copy your name EXACTLY as the "name" column shows it, then:
+--   grant role analyst          to user "<YOUR_USER_NAME>";
+--   grant role governance_admin to user "<YOUR_USER_NAME>";
+--   grant role pii_reader       to user "<YOUR_USER_NAME>";   -- only to demo unmasking

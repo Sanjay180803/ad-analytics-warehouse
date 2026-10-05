@@ -58,6 +58,9 @@ grant usage, create schema on database analytics to role transformer;
 
 grant usage on warehouse reporting_wh to role analyst;
 grant usage on database analytics to role analyst;
+-- dbt's `grants:` config grants SELECT on tables, but a role also needs USAGE on
+-- the schema to reach them. Future-grant it so schemas dbt creates are covered.
+grant usage on future schemas in database analytics to role analyst;
 -- schema + table SELECT grants for ANALYST are issued by dbt (`grants:` config in
 -- dbt_project.yml), so access lives in version control next to the models.
 

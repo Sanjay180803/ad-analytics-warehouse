@@ -2,7 +2,7 @@
 
 One DAG run = one day of Criteo impressions (the run's data interval):
 
-    wait_for_raw_partition   S3 sensor (deferrable) on raw/.../dt=<ds>/_SUCCESS
+    wait_for_raw_partition   S3 sensor (reschedule mode) on raw/.../dt=<ds>/_SUCCESS
     spark_clean              PySpark: dedupe, cast, quarantine, Parquet -> clean/.../dt=<ds>/
     load.campaign_changes    Snowflake: reload the small campaign change log
     load.impressions_day     Snowflake: delete dt=<ds> + COPY INTO (idempotent)
@@ -99,7 +99,7 @@ with DAG(
         task_id="wait_for_raw_partition",
         bucket_key=f"{RAW_ROOT}/impressions/dt={{{{ ds }}}}/_SUCCESS",
         aws_conn_id="aws_default",
-        deferrable=True,            # frees the worker slot while waiting
+        mode="reschedule",          # frees the worker slot between checks
         poke_interval=300,
         timeout=6 * 3600,
         retries=0,                  # the sensor's own timeout is the retry policy

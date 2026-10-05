@@ -1,4 +1,6 @@
 -- Idempotent reload of one day: delete the partition, then COPY it back from S3.
+-- Parquet timestamps are UTC; make sure the cast to TIMESTAMP_NTZ does not shift them.
+alter session set timezone = 'UTC';
 -- Rendered by Airflow ({{ ds }} = the run's logical date). Safe to rerun and backfill.
 -- FORCE = TRUE because COPY's 64-day load history would otherwise skip files it
 -- has seen before, which is exactly what a rerun needs to load again.
