@@ -13,9 +13,11 @@ One DAG run = one day of Criteo impressions (the run's data interval):
 Reliability features
   * Retries: every task retries with exponential backoff; on_failure_callback alerts
     only once the last retry fails.
-  * SLAs: Airflow 3 removed task SLAs; Deadline Alerts replace them. Two tiers
-    (warn at 90 min, page at 3 h after the run is queued). Queued-time is used, not
-    logical date, so backfilling January 2025 doesn't fire 30 instant "misses".
+  * SLAs: Airflow 3 removed task SLAs; Deadline Alerts replace them. Two tiers,
+    relative to the DAG's own average runtime (last 10 successful runs): warn when a
+    run is 30 min slower than usual, page at 90 min. Not anchored to logical date, so
+    backfilling January 2025 doesn't fire instant "misses"; not anchored to queued
+    time, because clearing such runs crashes in Airflow 3.3.
   * Per-task execution_timeout as a hard stop.
   * Backfills: every task is keyed on {{ ds }} and idempotent (partition overwrite in
     Spark, delete+COPY in Snowflake, microbatch in dbt), so any day can be rerun.
@@ -82,15 +84,19 @@ with DAG(
     default_args=default_args,
     template_searchpath=[INCLUDE],
     tags=["ads", "criteo", "snowflake", "dbt", "spark"],
+    # Deadlines are relative to how long this DAG *usually* takes (average of the
+    # last 10 successful runs, once at least 3 exist), not to queued time:
+    # Airflow 3.3 crashes when clearing/re-backfilling runs that carry a
+    # DAGRUN_QUEUED_AT deadline (TypeError in _recalculate_dagrun_queued_at_deadlines).
     deadline=[
         DeadlineAlert(
-            reference=DeadlineReference.DAGRUN_QUEUED_AT,
-            interval=timedelta(minutes=90),
+            reference=DeadlineReference.AVERAGE_RUNTIME(max_runs=10, min_runs=3),
+            interval=timedelta(minutes=30),
             callback=SyncCallback(notify_deadline_missed, kwargs={"tier": "warn"}),
         ),
         DeadlineAlert(
-            reference=DeadlineReference.DAGRUN_QUEUED_AT,
-            interval=timedelta(hours=3),
+            reference=DeadlineReference.AVERAGE_RUNTIME(max_runs=10, min_runs=3),
+            interval=timedelta(minutes=90),
             callback=SyncCallback(notify_deadline_missed, kwargs={"tier": "page"}),
         ),
     ],

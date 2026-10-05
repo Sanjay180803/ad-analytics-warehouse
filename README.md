@@ -231,6 +231,21 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 - **Pools.** Spark runs in local mode inside the worker, so `spark_local` has 1 slot. All Snowflake and dbt writes share `warehouse_writes` (1 slot), so full-rebuild models never race. Sensors and Spark for other days still overlap.
 - **Reschedule-mode sensor.** It frees the worker slot between checks for `_SUCCESS`.
 
+## Results
+
+- **16.5M impressions** across 31 daily partitions, loaded S3 → Spark → Snowflake → dbt by Airflow
+- **Spark tuning:** cleaning job 1.57× faster, output files cut from 6,200 to 31; broadcast join 2.9× faster than sort-merge
+- **Governance:** `user_id` masked by tag-based policy. Analysts see a SHA-256 pseudonym, `PII_READER` sees the real value
+
+| Airflow: 31 daily runs | dbt lineage |
+|---|---|
+| ![Airflow grid](docs/images/airflow_grid.png) | ![dbt lineage](docs/images/dbt_lineage.png) |
+
+| Analyst view (masked) | PII reader view |
+|---|---|
+| ![analyst](docs/images/masking_analyst.png) | ![pii reader](docs/images/masking_pii_reader.png) |
+
+
 ## Keeping it inside free tiers
 
 - Each warehouse is XSMALL with `auto_suspend = 60`. A resource monitor suspends everything at 50 credits a month.
@@ -245,15 +260,7 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 - **Masking returns real IDs for an analyst.** Check `select current_role(), current_secondary_roles();`. Secondary roles count in `is_role_in_session`.
 - **The backfill runs but `dbt_build` waits.** That's the `warehouse_writes` pool working as designed.
 
-## Interview talking points
 
-1. Show the before/after table, and say *why* each lever helped.
-2. Explain why salting lost to broadcast at this scale, and when it wouldn't.
-3. Cover SCD2 from a change log versus snapshots, and the as-of join.
-4. Explain why `fct_conversions` is a full rebuild while impressions are microbatch.
-5. Cover tag-based masking with pseudonyms rather than nulls: privacy without breaking analytics.
-6. Explain idempotency end to end, which makes rerunning any day safe.
-7. Cover SLAs in Airflow 3, and why the deadline is anchored to queued time.
 
 ---
 Data: Diemert, Meynet, Galland, Lefortier. *Attribution Modeling Increases Efficiency of Bidding in Display Advertising.* AdKDD & TargetAd, KDD 2017. CC BY-NC-SA 4.0.
