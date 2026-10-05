@@ -239,7 +239,7 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 
 | Airflow: 31 daily runs | dbt lineage |
 |---|---|
-| ![Airflow grid](docs/images/airflow_grid.png) | ![dbt lineage](docs/images/dbt_lineage.png) |
+| ![Airflow grid](docs/images/airflow_grid.png) | ![dbt lineage](docs/images/dbt_dag.png) |
 
 | Analyst view (masked) | PII reader view |
 |---|---|
