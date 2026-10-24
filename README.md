@@ -34,6 +34,8 @@ Airflow 3 (Astro CLI) runs one DAG run per day: sensor → Spark → load → fr
 | Lineage docs | `dbt docs`, published to S3 by the DAG; `exposures` in `_reporting.yml` |
 | Airflow with retries, SLAs, backfills | `dags/ad_analytics_daily.py`, `plugins/alerting.py` |
 
+![CI](https://github.com/Sanjay180803/ad-analytics-warehouse/actions/workflows/ci.yml/badge.svg)
+
 ## Repo layout
 
 This repo is an Astro project: `astro dev start` works from the root.
@@ -50,7 +52,7 @@ tests/                             Spark tests (pytest), DAG integrity tests (as
 Dockerfile, requirements.txt, packages.txt, airflow_settings.yaml   Astro image + pools
 ```
 
-## Data caveats (put these in your write-up, interviewers respect it)
+## Data caveats
 
 - **Dates are anchored.** Criteo timestamps are seconds from the first impression. Every component anchors day 0 to `CRITEO_ANCHOR_DATE` (default `2025-01-01`), giving 31 daily partitions: 2025-01-01 to 2025-01-31 (the last impressions fall just past midnight of day 30).
 - **There is no device field.** `dim_device` uses `cat1`, an undisclosed low-cardinality contextual feature, as a device/placement segment proxy. The modeling pattern (natural key, surrogate key, unknown member) is the real thing; the semantics are a stand-in.
@@ -149,7 +151,7 @@ To see lineage, open `s3://<bucket>/dbt-docs/index.html` (download it, or front 
 
 ## Spark tuning results
 
-Measured on the full dataset (16,468,027 impressions, 31 daily partitions), PySpark 4.2 in local mode (`local[4,4]`, 12 GB driver) on a 14-core Windows laptop, reading and writing local disk. Raw output: [`docs/benchmark_results.md`](docs/benchmark_results.md).
+Measured on the full dataset (16,468,027 impressions, 31 daily partitions), PySpark 4.2 in local mode (`local[4,4]`, 12 GB driver) on a 14-core Windows laptop, reading and writing local disk. One run per configuration (join timings after a warm-up run), so treat small differences such as AQE vs. sort-merge as within noise. Raw output: [`docs/benchmark_results.md`](docs/benchmark_results.md).
 
 ### A. Cleaning job: read gzip TSV, cast, dedupe, write Parquet partitioned by day
 
@@ -217,7 +219,7 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 
 ## Governance
 
-- **Tests.** 60+ tests: `unique`, `not_null`, `relationships` from every fact FK to its dimension, `accepted_values`, ranges (CTR between 0 and 1), SCD2 integrity, and a reconciliation test checking that mart totals equal fact totals. Failures are stored in a `test_failures` schema so you can query the bad rows.
+- **Tests.** 63 dbt tests (`dbt ls --resource-type test`, checked in CI): `unique`, `not_null`, `relationships` from every fact FK to its dimension, `accepted_values`, ranges (CTR between 0 and 1), SCD2 integrity, and a reconciliation test checking that mart totals equal fact totals. Failures are stored in a `test_failures` schema so you can query the bad rows.
 - **Freshness.** On `_loaded_at`: warn after 26h, error after 50h. The DAG runs it before the dbt build.
 - **Masking.** This is **tag-based**. One tag, `governance.tags.pii_type`, has the masking policy attached. dbt re-tags columns marked `meta: {pii: user_id}` after every build (`create or replace` drops tags). Analysts see a salted SHA-256 pseudonym, so distinct-user counts and joins still work but the ID can't be recovered. `PII_READER` sees real values. The pipeline roles see real values because they move the data.
 - **RBAC.** Functional roles: `LOADER` writes RAW, `TRANSFORMER` reads RAW and writes ANALYTICS, `ANALYST` reads core and marts, `PII_READER` unmasks, `GOVERNANCE_ADMIN` owns policies. Warehouses are separated per workload. Analyst grants are in dbt config, so access is versioned with the models. `PII_READER` deliberately doesn't roll up to `SYSADMIN`.
@@ -234,7 +236,7 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 ## Results
 
 - **16.5M impressions** across 31 daily partitions, loaded S3 → Spark → Snowflake → dbt by Airflow
-- **Spark tuning:** cleaning job 1.57× faster, output files cut from 6,200 to 31; broadcast join 2.9× faster than sort-merge
+- **Spark tuning:** cleaning job 1.57× faster, output files cut from 6,200 to 31; broadcast join 2.9× faster than sort-merge and 3.5× faster than salting (single runs)
 - **Governance:** `user_id` masked by tag-based policy. Analysts see a SHA-256 pseudonym, `PII_READER` sees the real value
 
 | Airflow: 31 daily runs | dbt lineage |
@@ -249,7 +251,7 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 ## Keeping it inside free tiers
 
 - Each warehouse is XSMALL with `auto_suspend = 60`. A resource monitor suspends everything at 50 credits a month.
-- A full 30-day backfill runs about 31 short dbt builds. Watch `snowflake.account_usage.warehouse_metering_history`.
+- A full 31-day backfill runs 31 short dbt builds. Watch `snowflake.account_usage.warehouse_metering_history`.
 - S3: the raw gzip (~650 MB) plus Parquet (~800 MB) plus benchmark outputs. Delete `bench/` after benchmarking.
 
 ## Troubleshooting
