@@ -150,9 +150,12 @@ def bench_join(raw_root: str, clean_path: str, repeats: int, scale: int, salt_bu
 
 
 def to_markdown(clean: dict, join: dict, cores: int, scale: int) -> str:
+    n_runs = len(clean["baseline"]["runs_s"])
+    runs_note = ("Single run per configuration; repeat with --repeats 3 or more before drawing firm conclusions."
+                 if n_runs == 1 else f"Median of {n_runs} runs per configuration.")
     lines = ["# Spark tuning benchmark", "",
              f"Machine: {os.getenv('SPARK_MASTER', 'local[*,4]')} on a {cores}-core laptop. Scale factor: {scale}x. "
-             "Median of the listed runs; join timings exclude a warm-up run.", "",
+             f"{runs_note} Join timings exclude a warm-up run.", "",
              "## A. Cleaning job (all days)", "",
              "| Mode | Median runtime (s) | Output files | Rows out | Duplicates removed | Quarantined |",
              "|---|---|---|---|---|---|"]
@@ -172,8 +175,7 @@ def to_markdown(clean: dict, join: dict, cores: int, scale: int) -> str:
     for s in JOIN_STRATEGIES:
         r = join["strategies"][s]
         lines.append(f"| {s} | {r['median_s']} | {', '.join(map(str, r['runs_s']))} |")
-    lines += ["", "Interpretation notes go here after you run it on the real data "
-              "(which strategy won, and why; see README)."]
+    lines += ["", "Interpretation: see \"Spark tuning results\" in the README."]
     return "\n".join(lines) + "\n"
 
 

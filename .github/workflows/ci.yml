@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  spark-tests:
+    # Landing + Spark cleaning on a synthetic Criteo-format file (no AWS needed).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install "pyspark==4.2.0" "pandas<3" numpy pyarrow pytest
+      - run: pytest tests/test_spark_clean.py -v
+
+  dbt-parse:
+    # Compiles the project and checks the test inventory without a Snowflake
+    # connection (parse and ls do not connect).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: include/dbt
+    env:
+      DBT_PROFILES_DIR: .
+      SNOWFLAKE_ACCOUNT: ci
+      SNOWFLAKE_USER: ci
+      SNOWFLAKE_PRIVATE_KEY_PATH: /dev/null
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install dbt-core dbt-snowflake
+      - run: dbt deps
+      - run: dbt parse
+      - name: At least 60 data tests
+        run: |
+          n=$(dbt ls --resource-type test --output name -q | grep -c .)
+          echo "dbt tests: $n"
+          test "$n" -ge 60
