@@ -1,0 +1,13 @@
+# Streaming path (Kafka -> Spark Structured Streaming -> Snowflake), pinned to the
+# versions it was tested with. Spark pulls org.apache.spark:spark-sql-kafka-0-10_2.13
+# (matching the PySpark version) from Maven at runtime when --bootstrap is used.
+pyspark==4.2.0
+pandas==2.3.3
+numpy==2.5.4
+pyarrow==26.0.0
+duckdb==2.0.0
+jsonschema==4.26.0
+PyYAML==6.0.3
+confluent-kafka==2.16.0
+snowflake-connector-python==5.1.0
+pytest==9.1.1

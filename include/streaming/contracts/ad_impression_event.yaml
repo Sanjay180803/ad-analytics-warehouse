@@ -1,0 +1,129 @@
+# Data contract: ad impression events on Kafka.
+#
+# This file is the single source of truth for the event schema. It generates:
+#   * the JSON Schema the PRODUCER validates every event against before sending
+#   * the Spark schema + validation rules the CONSUMER (stream_impressions.py) enforces
+# A CI gate (check_contract.py) blocks any change that would break consumers
+# unless it comes with a major version bump and a new topic.
+
+contract: ad_impression_event
+version: 1.0.0
+status: active
+description: >
+  One event per displayed ad (impression), published by the ad server as it
+  happens. Same grain and same impression_id as the batch path
+  (RAW.CRITEO.IMPRESSIONS), so batch and stream can be reconciled row for row.
+
+owner:
+  team: ads-platform
+  slack: "#ads-platform"
+consumers:
+  - name: ad-analytics-warehouse streaming loader (Spark Structured Streaming)
+    use: RAW.CRITEO.IMPRESSIONS_STREAM, CAMPAIGN_MINUTE_METRICS
+    contact: data-engineering
+
+transport:
+  system: kafka
+  topic: ad.impressions.v1          # major version is part of the topic name
+  dlq_topic_or_table: RAW.CRITEO.IMPRESSIONS_DLQ
+  key: campaign_id                  # per-campaign ordering within a partition
+  format: json
+  partitions: 6
+  retention_hours: 168
+
+compatibility:
+  mode: backward                    # consumers on 1.x must read every 1.y event
+  rules:
+    - adding an optional field is allowed (minor bump)
+    - adding a required field, removing a field, changing a type (other than widening), making an optional field required, making a required field optional, or tightening a constraint is breaking (major bump + new topic)
+  unknown_fields: ignore            # consumers ignore fields they don't know (forward compatible)
+
+fields:
+  - name: schema_version
+    type: string
+    required: true
+    description: Contract version the producer used, e.g. "1.0.0". Consumers reject other major versions.
+    constraints: {pattern: '^1\.[0-9]+\.[0-9]+$'}
+  - name: impression_id
+    type: string
+    required: true
+    description: SHA-256 (hex) of the raw Criteo row, fields joined with \x01. Identical to the batch path's key.
+    constraints: {pattern: '^[0-9a-f]{64}$'}
+  - name: event_ts
+    type: timestamp
+    required: true
+    description: When the impression was served, ISO-8601 UTC.
+  - name: produced_at
+    type: timestamp
+    required: true
+    description: When the producer published the event, ISO-8601 UTC. Used for end-to-end latency.
+  - name: user_id
+    type: string
+    required: true
+    pii: user_id                    # masked downstream by the governance tag policy
+    description: Criteo user identifier.
+  - name: campaign_id
+    type: long
+    required: true
+    description: Campaign identifier. Must exist in the campaign change log.
+    constraints: {minimum: 0}
+  - name: is_click
+    type: boolean
+    required: true
+  - name: is_conversion_path
+    type: boolean
+    required: true
+  - name: cost
+    type: decimal(18,8)
+    required: true
+    description: Transformed cost (not dollars; see README data caveats).
+    constraints: {minimum: 0}
+  - name: conversion_ts
+    type: timestamp
+    required: false
+  - name: conversion_id
+    type: long
+    required: false
+  - name: is_attributed
+    type: boolean
+    required: false
+  - name: click_pos
+    type: int
+    required: false
+    constraints: {minimum: 0}
+  - name: click_nb
+    type: int
+    required: false
+    constraints: {minimum: 0}
+  - name: cpo
+    type: decimal(18,6)
+    required: false
+  - name: time_since_last_click_s
+    type: long
+    required: false
+  - {name: cat1, type: string, required: false}
+  - {name: cat2, type: string, required: false}
+  - {name: cat3, type: string, required: false}
+  - {name: cat4, type: string, required: false}
+  - {name: cat5, type: string, required: false}
+  - {name: cat6, type: string, required: false}
+  - {name: cat7, type: string, required: false}
+  - {name: cat8, type: string, required: false}
+  - {name: cat9, type: string, required: false}
+
+quality_rules:                      # enforced by the consumer; failures go to the DLQ with the rule name
+  - name: campaign_known
+    description: campaign_id exists in the campaign change log (same rule as the batch job's unknown_campaign).
+  - name: not_from_future
+    description: event_ts is at most 5 minutes after produced_at.
+    max_skew_seconds: 300
+
+slos:
+  freshness_seconds_p95: 120        # event_ts -> landed in RAW.CRITEO.IMPRESSIONS_STREAM
+  dlq_rate_max: 0.01                # share of events per hour routed to the DLQ
+  aggregate_lateness_minutes: 10    # watermark; later events still land in RAW, but miss the minute aggregates
+
+changelog:
+  - version: 1.0.0
+    date: 2026-10-25
+    change: Initial contract.

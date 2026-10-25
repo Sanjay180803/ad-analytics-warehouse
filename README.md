@@ -1,6 +1,6 @@
 # Ad Analytics Warehouse
 
-A batch pipeline that turns 16.5M raw ad impressions into a governed star schema in Snowflake. It shows Spark tuning with measured before/after results, dimensional modeling (including SCD Type 2), data governance and orchestration.
+A pipeline that turns 16.5M raw ad impressions into a governed star schema in Snowflake. The **batch path** shows Spark tuning with measured before/after results, dimensional modeling (including SCD Type 2), data governance and orchestration. The **streaming path** adds Kafka → Spark Structured Streaming → Snowflake with an enforced data contract, a dead-letter queue, event-time watermarks and exactly-once effects in the warehouse (see [Streaming path](#streaming-path-kafka--spark-structured-streaming--snowflake)).
 
 ```
 Criteo TSV (623 MB gz)
@@ -19,6 +19,12 @@ Snowflake RAW.CRITEO.IMPRESSIONS ──► dbt (include/dbt) ──► ANALYTICS
                                        mart_campaign_daily_performance (CTR, CVR, spend)
 
 Airflow 3 (Astro CLI) runs one DAG run per day: sensor → Spark → load → freshness → dbt build → docs
+
+Streaming path (same impression_id, same RAW schema, reconciled against batch by a dbt test)
+ad server ──► Kafka ad.impressions.v1 ──► Spark Structured Streaming ──► Snowflake RAW.CRITEO
+  (producer validates    (6 partitions,     contract check → DLQ          IMPRESSIONS_STREAM   (MERGE on impression_id)
+   against the data       keyed by           watermark + dedupe            CAMPAIGN_MINUTE_METRICS (1-min windows)
+   contract)              campaign_id)       1-min windows                 IMPRESSIONS_DLQ, STREAM_* metrics
 ```
 
 | Requirement | Where it lives |
@@ -33,6 +39,8 @@ Airflow 3 (Astro CLI) runs one DAG run per day: sensor → Spark → load → fr
 | Role-based access | `00_account_setup.sql`, `02_governance.sql`, `grants:` in `dbt_project.yml` |
 | Lineage docs | `dbt docs`, published to S3 by the DAG; `exposures` in `_reporting.yml` |
 | Airflow with retries, SLAs, backfills | `dags/ad_analytics_daily.py`, `plugins/alerting.py` |
+| Streaming ingestion: Kafka → Spark Structured Streaming → Snowflake | `include/streaming/`, `include/snowflake/03_streaming.sql`, `docker-compose.streaming.yml` |
+| Data contract, enforced at producer and consumer, with a CI compatibility gate | `include/streaming/contracts/ad_impression_event.yaml`, `contract.py`, `check_contract.py` |
 
 ![CI](https://github.com/Sanjay180803/ad-analytics-warehouse/actions/workflows/ci.yml/badge.svg)
 
@@ -48,7 +56,9 @@ include/spark/                     cleaning job, benchmark, shared session confi
 include/snowflake/                 one-time account, S3 integration, governance SQL
 include/sql/                       per-run load SQL (templated by Airflow)
 include/dbt/                       dbt project
-tests/                             Spark tests (pytest), DAG integrity tests (astro dev pytest)
+include/streaming/                 Kafka producer, Spark Structured Streaming job, sinks, data contract
+tests/                             Spark, contract and streaming tests (pytest), real-Kafka integration test,
+                                   DAG integrity tests (astro dev pytest)
 Dockerfile, requirements.txt, packages.txt, airflow_settings.yaml   Astro image + pools
 ```
 
@@ -219,7 +229,7 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 
 ## Governance
 
-- **Tests.** 63 dbt tests (`dbt ls --resource-type test`, checked in CI): `unique`, `not_null`, `relationships` from every fact FK to its dimension, `accepted_values`, ranges (CTR between 0 and 1), SCD2 integrity, and a reconciliation test checking that mart totals equal fact totals. Failures are stored in a `test_failures` schema so you can query the bad rows.
+- **Tests.** 75 dbt tests (63 batch + 12 streaming, including the stream/batch reconciliation) (`dbt ls --resource-type test`, checked in CI): `unique`, `not_null`, `relationships` from every fact FK to its dimension, `accepted_values`, ranges (CTR between 0 and 1), SCD2 integrity, and a reconciliation test checking that mart totals equal fact totals. Failures are stored in a `test_failures` schema so you can query the bad rows.
 - **Freshness.** On `_loaded_at`: warn after 26h, error after 50h. The DAG runs it before the dbt build.
 - **Masking.** This is **tag-based**. One tag, `governance.tags.pii_type`, has the masking policy attached. dbt re-tags columns marked `meta: {pii: user_id}` after every build (`create or replace` drops tags). Analysts see a salted SHA-256 pseudonym, so distinct-user counts and joins still work but the ID can't be recovered. `PII_READER` sees real values. The pipeline roles see real values because they move the data.
 - **RBAC.** Functional roles: `LOADER` writes RAW, `TRANSFORMER` reads RAW and writes ANALYTICS, `ANALYST` reads core and marts, `PII_READER` unmasks, `GOVERNANCE_ADMIN` owns policies. Warehouses are separated per workload. Analyst grants are in dbt config, so access is versioned with the models. `PII_READER` deliberately doesn't roll up to `SYSADMIN`.
@@ -247,6 +257,69 @@ To reproduce: `python include\spark\benchmark.py --raw-root <landing folder> --c
 |---|---|
 | ![analyst](docs/images/masking_analyst.png) | ![pii reader](docs/images/masking_pii_reader.png) |
 
+
+## Streaming path: Kafka → Spark Structured Streaming → Snowflake
+
+The batch DAG lands each day once it is complete. The streaming path makes impressions queryable within seconds of being served, without giving up the batch path's guarantees.
+
+### Data contract
+[`include/streaming/contracts/ad_impression_event.yaml`](include/streaming/contracts/ad_impression_event.yaml) is the single source of truth for the event: fields, types, required/optional, constraints, PII tags, owner, consumers, topic and key, SLOs and compatibility rules. Everything else is generated from it:
+
+| Side | What it gets from the contract | Behavior |
+|---|---|---|
+| Producer (`producer.py`) | JSON Schema | Validates every event before sending; invalid events are never published. |
+| Consumer (`stream_impressions.py`) | Spark schema + rules | Parses with the contract schema; any violation goes to `IMPRESSIONS_DLQ` with a reason code instead of being dropped or loaded. |
+| CI (`check_contract.py`) | Old vs new contract | Blocks removed or retyped fields, new required fields, optional↔required flips, tightened constraints and key changes, unless the change bumps the major version **and** moves to a new topic (`ad.impressions.v2`). Adding an optional field needs a minor bump. |
+
+Consumer reason codes, checked in order (first failure wins): `invalid_json`, `type_mismatch`, `unsupported_schema_version`, `missing_required:<field>`, `constraint:<field>:<rule>`, then quality rules `quality:campaign_known` (same rule as the batch job's `unknown_campaign`) and `quality:not_from_future`.
+
+### Delivery semantics
+
+| Concern | How it's handled |
+|---|---|
+| Offsets | Kafka offsets live in the Structured Streaming checkpoint; a restart resumes exactly where it stopped (tested against a real broker). |
+| Duplicates (producer retries, replays) | `foreachBatch` is at-least-once, so every write is a `MERGE` on a natural key: `impression_id` for impressions, `(topic, partition, offset)` for the DLQ, `(campaign_id, window_start)` for aggregates. A replayed batch is a no-op. A test deletes the checkpoint, re-reads everything, and checks the warehouse is unchanged. |
+| Late events | The raw table never drops data. The minute aggregates use a 10-minute event-time watermark: Spark drops a row as late when it is older than the **previous** micro-batch's watermark, so rows between the previous and current watermark still count, and no window is ever emitted twice. Dropped rows are counted in `STREAM_QUERY_PROGRESS`; the batch path and dbt remain the source of truth. |
+| Same key as batch | The producer computes `impression_id` exactly as the batch Spark job does (SHA-256 of the raw row). A test proves both paths produce identical keys, and the dbt test `assert_stream_reconciles_to_batch` reconciles them row for row for every closed day both loaded. |
+| Observability | `STREAM_BATCH_METRICS` (rows in/valid/DLQ, duplicates, latency p50/p95, DLQ rate per batch) and `STREAM_QUERY_PROGRESS` (throughput, batch duration, rows dropped by watermark, state size, from a `StreamingQueryListener`). dbt source freshness on `_ingested_at`: warn after 5 minutes, error after 15. |
+
+**Why MERGE through the Python connector, not the spark-snowflake connector?** Micro-batches are seconds of events, the Python connector needs no JVM jar matched to the Spark/Scala build, and `write_pandas` into a temp table + one `MERGE` in a transaction gives exactly-once effects. At much higher volume (tens of thousands of events per second), Snowpipe Streaming through the Snowflake Kafka connector is the better tool: lower cost and latency, with no Spark cluster to run.
+
+### Run it
+
+```bash
+pip install -r requirements-streaming.txt
+make sample land-local          # synthetic data + campaign list (as for the batch path)
+
+make stream-local               # no broker: Kafka-shaped files -> Spark -> DuckDB, prints table counts
+
+make kafka-up                   # or with real Kafka (Docker): single-node KRaft + UI on :8085
+make stream-produce             # replays 100K events at 2K/s with 1% injected faults
+make stream-run                 # Spark Structured Streaming, 10 s triggers, DuckDB sink
+
+make snowflake-streaming        # Snowflake: create the RAW streaming tables once
+make stream-run STREAM_SINK=snowflake   # same job, MERGEs into RAW.CRITEO as LOADER
+```
+
+### Tests
+- `tests/test_contract.py` (23 tests): schema generation, producer validation of each fault type, forward compatibility, and every compatibility-gate rule.
+- `tests/test_streaming.py` (12 tests): end to end on 20K events with 2% injected faults, 2% duplicates and 1% late events. It checks that every accepted impression lands exactly once (late ones included) and every fault type hits the DLQ with the right reason. **The minute aggregates must match an independent pandas model of Spark's watermark semantics exactly**, window by window. It also covers checkpoint restart, full replay without a checkpoint (warehouse unchanged), batch/stream key parity, the Snowflake sink's stage → MERGE → commit/rollback sequence, and the sink schema against `03_streaming.sql`.
+- `tests/integration/test_kafka_e2e.py`: a real Kafka broker (CI service container) with 6 partitions. It produces, streams, produces more, and streams again from the checkpoint; every record must be read exactly once.
+
+### Measured locally (500K events)
+500K-row synthetic file, 1% faults, 1% duplicates, 0.5% late; PySpark 4.2 local mode on a **2-vCPU** container; DuckDB sink; 10 micro-batches of about 50K events.
+
+| | |
+|---|---|
+| Raw query | median 4.9K events/s per micro-batch (10.7 s per 50K batch; the `toPandas` + MERGE step dominates) |
+| Aggregate query | median 7.1K events/s, peak state 84K rows (RocksDB state store) |
+| Correctness | 494,963 unique impressions loaded (no duplicates), 5,092 rejects in the DLQ (= injected faults), 1,994 late rows excluded from the minute aggregates but present in raw |
+
+These are single-machine numbers for a backlog replay, not a cluster benchmark. The reported latency in that run (about 90 s p50) is mostly time spent waiting in the backlog; in steady state it is about one trigger interval plus one batch duration.
+
+### What is and isn't verified
+- **Verified in CI:** the contract gate, everything in the test list above, and the real-Kafka round trip.
+- **Not exercised in CI:** the Snowflake sink against a live account (no credentials in CI). Its SQL and transaction sequence are unit-tested with a fake connection, and the DDL is checked against the sink schema. To verify against Snowflake, run `make snowflake-streaming`, then `make stream-run STREAM_SINK=snowflake` and the dbt tests.
 
 ## Keeping it inside free tiers
 

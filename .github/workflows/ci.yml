@@ -47,3 +47,79 @@ jobs:
           n=$(dbt ls --resource-type test --output name -q | grep -c .)
           echo "dbt tests: $n"
           test "$n" -ge 60
+
+  contract-gate:
+    # Blocks contract changes that would break consumers (removed/retyped fields,
+    # new required fields, tightened constraints...) unless they come with a major
+    # version bump and a new topic. Compares against the base branch (PRs) or the
+    # previous commit (pushes to main).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml==6.0.3 jsonschema==4.26.0
+      - name: Compatibility check
+        run: |
+          f=include/streaming/contracts/ad_impression_event.yaml
+          base=${{ github.event.pull_request.base.sha || github.event.before }}
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$base:$f" 2>/dev/null; then
+            echo "No previous version of the contract to compare against; first version accepted."
+            exit 0
+          fi
+          git show "$base:$f" > "$RUNNER_TEMP/contract_base.yaml"
+          python include/streaming/check_contract.py "$RUNNER_TEMP/contract_base.yaml" "$f"
+
+  streaming-tests:
+    # Contract + Spark Structured Streaming end to end on Kafka-shaped files
+    # (same parsing, validation, watermark and MERGE code as the Kafka path).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-streaming.txt
+      - run: pip install -r requirements-streaming.txt
+      - run: pytest tests/test_contract.py tests/test_streaming.py -v
+
+  kafka-integration:
+    # Real broker: producer -> Kafka (KRaft, 6 partitions) -> Spark Structured
+    # Streaming -> warehouse, then a second round that must resume from the
+    # checkpointed offsets.
+    runs-on: ubuntu-24.04
+    services:
+      kafka:
+        image: apache/kafka:4.0.0
+        ports: ["9092:9092"]
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
+          --health-interval 5s --health-timeout 10s --health-retries 30
+    env:
+      KAFKA_BOOTSTRAP: localhost:9092
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-streaming.txt
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ivy2.5.2
+          key: ivy-spark-sql-kafka-4.2.0
+      - run: pip install -r requirements-streaming.txt
+      - run: pytest tests/integration -v

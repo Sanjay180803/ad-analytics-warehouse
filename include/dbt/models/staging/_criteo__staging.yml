@@ -35,3 +35,23 @@ models:
           - accepted_values:
               arguments:
                 values: [manual_cpc, target_cpa, target_roas, max_conversions]
+
+  - name: stg_criteo__impressions_stream
+    description: >
+      Streamed impressions, typed exactly like stg_criteo__impressions so the two can be
+      unioned or reconciled. One row per impression; Kafka lineage kept for debugging.
+    columns:
+      - name: impression_id
+        data_tests: [unique, not_null]
+      - name: event_date
+        data_tests: [not_null]
+      - name: campaign_id
+        data_tests: [not_null]
+      - name: cost
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
+      - name: ingest_lag_s
+        description: Seconds from Kafka broker append to warehouse commit.

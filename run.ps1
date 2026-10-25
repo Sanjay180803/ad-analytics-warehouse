@@ -15,6 +15,11 @@
     .\run.ps1 astro-start    start local Airflow
     .\run.ps1 backfill       load all 31 days through Airflow
     .\run.ps1 backfill-day   rerun one day                   (-Day 2025-01-07)
+    .\run.ps1 stream-local   streaming path without a broker (files -> Spark -> DuckDB)
+    .\run.ps1 kafka-up       start local Kafka (Docker)
+    .\run.ps1 stream-produce replay the sample into Kafka
+    .\run.ps1 stream-run     run the streaming job against local Kafka
+    .\run.ps1 test-streaming contract + streaming tests
 
   If PowerShell refuses to run scripts, run this once first:
     Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
@@ -64,6 +69,7 @@ switch ($Task) {
         Run "python" @("-m", "venv", ".venv")
         Run $Py @("-m", "pip", "install", "--upgrade", "pip")
         Run $Py @("-m", "pip", "install", "pyspark==4.2.0", "pandas<3", "numpy", "pyarrow", "boto3", "pytest")
+        Run $Py @("-m", "pip", "install", "-r", "requirements-streaming.txt")
         # Spark on Windows needs winutils.exe + hadoop.dll to write local files
         New-Item -ItemType Directory -Force "$HadoopHome\bin" | Out-Null
         $base = "https://github.com/cdarlint/winutils/raw/master/hadoop-3.3.6/bin"
@@ -118,5 +124,21 @@ switch ($Task) {
         Run "astro" @("dev", "run", "backfill", "create", "--dag-id", "ad_analytics_daily",
                       "--from-date", $Day, "--to-date", $Day, "--reprocess-behavior", "completed")
     }
-    default { Get-Content $PSCommandPath -TotalCount 22 | Select-Object -Skip 1 }
+    "kafka-up"       { Run "docker" @("compose", "-f", "docker-compose.streaming.yml", "up", "-d", "--wait") }
+    "stream-produce" {
+        Run $Py @("include/streaming/producer.py", "--src", "data/sample.tsv.gz", "--bootstrap", "localhost:9092",
+                  "--limit", "100000", "--rate", "2000", "--fault-rate", "0.01", "--dup-rate", "0.01", "--late-rate", "0.005")
+    }
+    "stream-run" {
+        Run $Py @("include/streaming/stream_impressions.py", "--bootstrap", "localhost:9092", "--sink", "duckdb",
+                  "--campaigns", "data/landing/campaign_changes/campaign_changes.csv")
+    }
+    "stream-local" {
+        Run $Py @("include/streaming/producer.py", "--src", "data/sample.tsv.gz", "--to-files", "data/kafka_files",
+                  "--files", "5", "--limit", "100000", "--fault-rate", "0.01", "--dup-rate", "0.01", "--late-rate", "0.005")
+        Run $Py @("include/streaming/stream_impressions.py", "--source-dir", "data/kafka_files", "--sink", "duckdb",
+                  "--duckdb-path", "data/stream_warehouse.duckdb", "--available-now")
+    }
+    "test-streaming" { Run $Py @("-m", "pytest", "tests/test_contract.py", "tests/test_streaming.py", "tests/integration", "-q") }
+    default { Get-Content $PSCommandPath -TotalCount 27 | Select-Object -Skip 1 }
 }
